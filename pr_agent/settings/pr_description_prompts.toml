@@ -98,7 +98,7 @@ user="""PR Info:
 
 Previous title: '{{title}}'
 
-{%- if description %}
+{%- if prompt_bring_origin_description and description %}
 
 Previous description:
 =====

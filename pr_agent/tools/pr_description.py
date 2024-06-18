@@ -51,6 +51,7 @@ class PRDescription:
             "language": self.main_pr_language,
             "diff": "",  # empty diff for initial calculation
             "extra_instructions": get_settings().pr_description.extra_instructions,
+            "prompt_bring_origin_description": get_settings().pr_description.prompt_bring_origin_description,
             "commit_messages_str": self.git_provider.get_commit_messages(),
             "enable_custom_labels": get_settings().config.enable_custom_labels,
             "custom_labels_class": "",  # will be filled if necessary in 'set_custom_labels' function
@@ -80,7 +81,6 @@ class PRDescription:
             get_logger().debug("Relevant configs", artifacts=relevant_configs)
             if get_settings().config.publish_output:
                 self.git_provider.publish_comment("Preparing PR description...", is_temporary=True)
-
             await retry_with_fallback_models(self._prepare_prediction, ModelType.TURBO)
 
             if self.prediction:
@@ -199,6 +199,11 @@ class PRDescription:
 
         return response
 
+    def _get_jira_ticket_no_from_branch(self, branch_name: str) -> str:
+        pattern = r'(\w+-\d+)'
+        match = re.search(pattern, branch_name)
+        return match.group(0) if match else None
+
     def _prepare_data(self):
         # Load the AI prediction data into a dictionary
         self.data = load_yaml(self.prediction.strip())
@@ -207,18 +212,24 @@ class PRDescription:
             self.data["User Description"] = self.user_description
 
         # re-order keys
+        if 'description' in self.data:
+            description_value = self.data.pop('description')
+            # add related Jira ticket link in description
+            branch_name = self.git_provider.get_pr_branch()
+            ticket_no = self._get_jira_ticket_no_from_branch(branch_name)
+            if ticket_no:
+                description_value = f"{description_value}\n- Related Jira Issue(s): [JIRA-Link](https://tripalink.atlassian.net/browse/{ticket_no})"
+            self.data['description'] = description_value
+        if 'type' in self.data:
+            self.data['type'] = self.data.pop('type')
+        if 'pr_files' in self.data:
+            self.data['pr_files'] = self.data.pop('pr_files')
         if 'User Description' in self.data:
             self.data['User Description'] = self.data.pop('User Description')
         if 'title' in self.data:
             self.data['title'] = self.data.pop('title')
-        if 'type' in self.data:
-            self.data['type'] = self.data.pop('type')
         if 'labels' in self.data:
             self.data['labels'] = self.data.pop('labels')
-        if 'description' in self.data:
-            self.data['description'] = self.data.pop('description')
-        if 'pr_files' in self.data:
-            self.data['pr_files'] = self.data.pop('pr_files')
 
     def _prepare_labels(self) -> List[str]:
         pr_types = []
@@ -318,10 +329,11 @@ class PRDescription:
             else:
                 key_publish = key.rstrip(':').replace("_", " ").capitalize()
                 if key_publish == "Type":
-                    key_publish = "PR Type"
-                # elif key_publish == "Description":
-                #     key_publish = "PR Description"
-                pr_body += f"### **{key_publish}**\n"
+                    key_publish = "PR-Agent Detect PR Type"
+                elif key_publish == "Description":
+                    key_publish = "PR-Agent Description"
+                if key_publish != "User description":
+                    pr_body += f"## **{key_publish}**\n"
             if 'walkthrough' in key.lower():
                 if self.git_provider.is_supported("gfm_markdown"):
                     pr_body += "<details> <summary>files:</summary>\n\n"
@@ -333,14 +345,14 @@ class PRDescription:
                     pr_body += "</details>\n"
             elif 'pr_files' in key.lower():
                 changes_walkthrough, pr_file_changes = self.process_pr_files_prediction(changes_walkthrough, value)
-                changes_walkthrough = f"### **Changes walkthrough** 📝\n{changes_walkthrough}"
+                changes_walkthrough = f"## **Changes walkthrough** 📝\n{changes_walkthrough}"
             else:
                 # if the value is a list, join its items by comma
                 if isinstance(value, list):
                     value = ', '.join(v for v in value)
                 pr_body += f"{value}\n"
             if idx < len(self.data) - 1:
-                pr_body += "\n\n___\n\n"
+                pr_body += "\n\n"
 
         return title, pr_body, changes_walkthrough, pr_file_changes,
 
@@ -427,11 +439,11 @@ class PRDescription:
 
 
 </details>
-    
+
 
   </td>
   <td><a href="{link}">{diff_plus_minus}</a>{delta_nbsp}</td>
-</tr>                    
+</tr>
 """
                 if use_collapsible_file_list:
                     pr_body += """</table></details></td></tr>"""
